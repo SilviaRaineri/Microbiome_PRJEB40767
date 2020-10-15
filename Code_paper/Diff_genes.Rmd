@@ -1,0 +1,214 @@
+---
+title: "Differentially abundant genes"
+author: "Silvia Raineri"
+date: "09/10/2020"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(out.extra = '')
+knitr::opts_knit$set(root.dir = "/Volumes/Mellor/Silvia/Microbiome/RATFAT04/")
+```
+
+## Analysis of differentially abundant genes
+This is an analysis of differentially abundant genes in obese rats upon long-term (42 Days) treatment with Sibutramine. To achieve this, DESeq2 was used with the model: ~ number + day
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+source('./R/microbiome_functions.R')
+library('reshape2')
+library("DESeq2")
+kegg <- read_tsv('../Nick_Analysis/combined_counts.dir/KEGG_ko_combined_counts.tsv')
+kegg <- kegg[-grep("UNANNOTATED", kegg$KEGG_ko),] 
+kos <- kegg$KEGG_ko
+# filter to just keep the relevant samples
+to.keep <- paste0("day3", "_", c("4", "14", "25", "33", "40",  "55", "62", "75", "85"))
+to.keep <- append(to.keep, paste0(gsub("day3", "day42", to.keep), "H"))
+
+genes <- kegg[,to.keep]
+rownames(genes) <- kos
+
+## filter genes
+keep <- rowSums(genes >= 5) >= 9
+genes <- genes[keep,]
+name.keep <- names(keep[which(keep=="TRUE")])
+rownames(genes) <- name.keep #genes
+
+# make metadata
+metadata <- data.frame(day=gsub("*_.*", "", to.keep), number=c("4", "14", "25", "33", "40",  "55", "62", "75", "85"))
+rownames(metadata) <- to.keep
+dds <- DESeqDataSetFromMatrix(genes, colData=metadata, design= ~ number + day)
+dds <- DESeq(dds, test='Wald', fitType='parametric')
+res <- results(dds)
+
+sig.genes <- res[res$padj < 0.05 & !(is.na(res$padj)),]
+
+cat("Number significant = ", nrow(sig.genes))
+rlog.genes <- rlog(dds)
+```
+
+
+# Plot Heatmap 
+
+To plot the heatmap, Heatmap3 R package will automatically scale the data, but other packages might not, so make sure to do this before plotting. 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library("KEGGREST")
+ko.genes <-  keggList("ko")
+de.names <- ko.genes[names(ko.genes) %in% rownames(sig.genes)]
+rlog <- assay(rlog.genes)
+de.rlog <- rlog[match(rownames(sig.genes),rownames(rlog)),]
+
+
+heatmap3::heatmap3(de.rlog, Colv = NA,  showRowDendro = F, balanceColor = T, cexCol = 1.2, cexRow = 1.1,
+                   labRow  = gsub(';.*', '', de.names),  margins = c(6,12),
+                   ColSideAnn = sample_data(Sib)[,c('Sample','Day')], ColSideColors = c(rep('#02eb6b', 9), rep('#32468d' , 9)), ColSideLabs = 'Day')
+```
+# Plot boxplots for each significant gene
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+df <- data.frame(de.rlog, genes = rownames(de.rlog)) %>% melt()
+df$Day <- gsub('_.*', '', df$variable)
+df$number <- gsub('.*_', '', df$variable)
+df$number <- gsub('H', '', df$number)
+df$name <- ko.genes[match(df$genes, names(ko.genes))]
+df$name <- gsub(";.*", "", df$name)
+
+to.plot <- seq(1, 1047, 20)
+for (i in 1:length(to.plot)){
+  numb <- to.plot[i]
+  rows <- seq(numb, numb+19, 1)
+  print(rows)
+  show <- rownames(de.rlog)[rows]
+  dfm <- df[which(df$genes %in% show),]
+  p <- ggboxplot(dfm, x = 'Day', y = 'value', color = 'genes', group = "number") +
+    geom_line(aes(group = dfm$number), color = "#ddd1db") +
+    geom_point(aes(color = genes), size = 2) +
+    facet_wrap(~ name, scale="free_y") +
+    labs(x = "Day", y = "Abundance") +
+    theme(strip.text.x = element_text(size =10), axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size = 14), legend.position = "none")
+  print(p)
+}
+```
+
+# Fgsea
+Gene set enrichment analysis can be used to find enrichment of entire gene sets rather than single genes, thus providing insight into the biological pathways contributing to a particular phenotype (Subramanian et al., 2005). To perform it, fgsea R package was used and genes were ranked according to their Log2fc*-log10(p.val) value.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library("fgsea")
+library("KEGGREST")
+
+pathways.ko <- keggLink("pathway", "ko")
+pathways <- data.frame(ko = names(pathways.ko), pathway = pathways.ko)
+p <- mdgsa::annotMat2list(pathways)
+
+ranks <- res$log2FoldChange* -log10(res$pvalue) # from res object in DE genes deseq2
+names(ranks) <- rownames(res)
+
+fgseaRes <- fgsea(pathways = p, 
+                  stats = ranks,
+                  minSize=15,
+                  maxSize=500,
+                  nperm=100000)
+
+paths <- fgseaRes$pathway[grep("map",fgseaRes$pathway)]
+
+
+pathway.names <- c()
+for (i in 1:length(paths)){ 
+  f <- keggFind("pathway", paths[i])
+  pathway.names[i] <- f}
+
+fgsea.res <- fgseaRes[grep("map",fgseaRes$pathway),]
+fgsea.res$path_name <- pathway.names
+fgsea.res <- fgsea.res[order(fgsea.res$padj),]
+
+plotEnrichment(p[[head(fgseaRes[order(padj), ], 1)$pathway]],
+               ranks) + labs(title=head(fgseaRes[order(padj), ], 1)$pathway)
+
+flagellar <- fgsea.res$leadingEdge[[1]]
+df.f <- df[which(df$genes %in% flagellar),]
+ggboxplot(df.f, x = 'Day', y = 'value', color = 'genes', group = "number") +
+  geom_line(aes(group = df.f$number), color = "#ddd1db") +
+  geom_point(aes(color = genes), size = 2) + 
+  facet_wrap(~ name, scale="free_y") +
+  labs(x = "Day", y = "Abundance") +
+  theme(strip.text.x = element_text(size =10), axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size = 14), legend.position = "none")
+```
+
+# "Flagellar Assembly" core genes by species 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# load genes by species table and filter out samples you don't need
+species_genes <- read.table('~/Documents/KEGG_ko_BY_family_combined_counts.tsv', header = T)
+to.keep <- paste0("day3", "_", c("4", "14", "25", "33", "40", "55", "62", "75", "85"))
+to.keep <- append(to.keep, paste0(gsub("day3", "day42", to.keep), "H"))
+ko_sp <- species_genes$KEGG_ko_BY_family
+species_genes <- species_genes[,to.keep]
+rownames(species_genes) <- ko_sp
+species_genes$gene_name <- gsub("_.*", "", rownames(species_genes))
+
+
+##  select only genes for "Flagellar assemnbly"
+fla <- species_genes[species_genes$gene_name %in% flagellar,]
+fla$tax <- rownames(fla)
+fla$gene <- ko.genes[match(fla$gene_name, names(ko.genes))] %>% gsub(";.*", "", .)
+
+tax.fla <- sapply(as.character(fla$tax), function (x) strsplit(x, "|", fixed = T), simplify = T) 
+tax.fla <- data.frame(matrix(unlist(tax.fla), ncol = 5, byrow = TRUE))
+tax.fla$X1 <- gsub(".*k", "", tax.fla$X1)
+colnames(tax.fla) <- c("Kingdom", "Phylum", "Class", "Order", "Family")#, "Genus", "Species")
+fla$species <- if_else(tax.fla$Family == 'f__unassigned', as.character(tax.fla$Phylum), as.character(tax.fla$Family))
+
+fla <- fla[-which(rowSums(fla[,-(19:22)])==0),]
+fla <- fla[-grep("k__unassigned", rownames(fla)),] # take out k_unassigned
+p.fla <- melt(fla) %>% group_by(gene, variable) %>% # calculate % contribution of each species in counts of each gene 
+  mutate(percent = value / sum(value)*100)
+
+
+goi <- unique(p.fla$gene_name)
+# Prepare data for plotting
+my.dfs <- list()
+for (i in 1:23) {
+  s <- subset(p.fla, gene_name==p.fla$gene_name[match(goi[i], p.fla$gene_name)])
+  s$Day <- gsub("_.*", "", s$variable)
+  top10 <- s %>% group_by(species) %>% summarize(spp_counts = sum(value)) %>% arrange(., desc(spp_counts)) %>% top_n(., 10)
+  s$species[!(s$species %in% top10$species)] <- "other"
+  my.dfs[[i]] <- s
+}
+names(my.dfs) <- goi
+
+colors <- readxl::read_xlsx("./Data/Species_colors.xlsx", sheet = 3)
+
+three <- my.dfs[match(c("ko:K02406", "ko:K02556", "ko:K02390"),names(my.dfs))]
+
+three[[1]]$cols <- colors$color[match(three[[1]]$species,colors$species)]
+three[[2]]$cols <- colors$color[match(three[[2]]$species,colors$species)]
+three[[3]]$cols <- colors$color[match(three[[3]]$species,colors$species)]
+
+
+
+my_plots <- list()
+for (i in 1:3){
+  l <- three[[i]]
+  x <- l$cols
+  names(x) <- l$species
+  p <- ggplot(l, aes(x = variable , y = percent, fill = species)) +
+    geom_bar(stat = "identity", position = "stack") +
+    scale_fill_manual(values = x) + 
+    facet_wrap(~ Day, scales = "free") +
+    theme_classic() +
+    #scale_x_discrete(labels = gsub("s__|o__", "", d$nomenclature)) +
+    labs(title = l$gene, x = "Samples", y = "Abundance (%)", fill = "Species") +
+    coord_flip() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), text = element_text(size = 14),
+          legend.position = "bottom", legend.key.size = unit(0.25, "cm"), legend.margin = margin(0, 50, 0, 10)) +
+    guides(fill =guide_legend(nrow = 6))
+  my_plots[[i]] <- p
+  print(my_plots[[i]])
+}
+```
+
+Below are the details of the R session that was used when this script was executed.
+
+```{r sessionInfo}
+print(sessionInfo())
+```

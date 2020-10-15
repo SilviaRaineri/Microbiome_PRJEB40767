@@ -1,0 +1,233 @@
+---
+title: "Weight Data"
+author: "Silvia Raineri"
+date: "1 March 2018"
+output: html_document
+---
+## Weight Data
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(out.extra = '')
+knitr::opts_knit$set(root.dir = "/Volumes/Mellor/Silvia/Microbiome/RATFAT04/")
+```
+
+As the hypothesis is that the drug is acting on these rats' weight, let's see how this parameter has changed throughout the experiment. To do so, we will consider both cohorts. 
+
+```{R, echo = F, error = F, message = F, warning = F}
+
+library(tidyverse)
+# All weights
+weight.chart <- read.delim('./Data/weigths_cohort1.csv', sep = ',')
+
+
+
+#Create a custom color scale
+library(RColorBrewer)
+myColors <- c('#a8c0fc','#ff9b9b', '#fccd76', '#55d2cc', '#d43a5b', '#ffa227','#359c7a', '#1b2152')
+names(myColors) <- levels(weight.chart$Group)
+colScale <- scale_colour_manual(name = "grp",values = myColors)
+
+weight.chart$Treatment <- factor(weight.chart$Treatment, levels = c('Ctrl', 'FK506', 'Bupropion', 'Naltrexone','FK506_B', 'FK506_N', 'B_N', 'Sibutramine'))
+weight.chart <- arrange(weight.chart, Treatment)
+
+```
+
+
+```{R, echo = F, error = F, message = F, warning = F}
+ggplot(data = weight.chart, aes(x = Timepoint, y = Weight.g., group = Sample,  col = Group)) +
+  geom_line(aes(linetype = Cohort)) +
+  geom_text(aes(label=weight.chart$Sample),hjust=1.2, vjust=0.01, size = 1) +
+  scale_colour_manual(name = "Group",values = myColors) +
+  facet_wrap(~ Treatment, nrow = 2) +
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=90,hjust=1)) 
+
+```
+  
+
+ANOVA was used to calculate any significant differences between the weight of the rats with the model: weight ~ timepoint + Cohort.  
+
+```{r, echo = FALSE,fig.height= 7, fig.width=7,error = F, message = F, warning = F}
+
+weight <- readxl::read_xlsx('./Data/RATFAT04_weights.xlsx') %>% gather( 'W_-3':'W_42', key = 'timepoint', value = 'weight' )
+weight$weight <- gsub(",",".",weight$weight) %>% as.numeric(.)
+sub <- subset(weight, timepoint=="W_-3" | timepoint=="W_42")
+
+### ANOVA ---------------------
+groups <- c("A", "B", "C", "D", "E", "F", "G", "H")
+my.data <- list()
+for(i in 1:8) {
+  a <- subset(sub, Group==groups[i])
+  my.data[[i]] <- a
+}
+
+anova.res.car <- list()
+for (i in 1:8) {
+  mod <- lm(weight ~ timepoint + Cohort, my.data[[i]])
+  x <- car::Anova(mod, type="II") 
+  xt <- rstatix::tukey_hsd(mod)
+  anova.res.car[[i]] <- list(x, xt)
+}
+
+names(anova.res.car) <- groups
+print(anova.res.car)
+```
+# Alpha diversity 
+
+```{r, echo = FALSE,fig.height= 7, fig.width=7, error = F, message = F, warning = F}
+library("phyloseq")
+source('./R/microbiome_functions.R')
+map <- readxl::read_xlsx('./Data/july19_map.xlsx')
+
+species <- read.delim('../Nick_Analysis/combined_counts.dir/species_combined_counts.tsv') # NB! No species data about samples   '48'  '50'  '54'  '50H' 
+colnames(species) <- gsub('day42_', '',colnames(species))
+colnames(species) <- gsub('day3_', '', colnames(species))
+species_id <- species[,1]
+
+map <- map[which(map$Sample %in% colnames(species)),]
+map <- as.data.frame(map)
+rownames(map) <- map$Sample
+
+species <- species[, match(map$Sample, colnames(species))]
+rownames(species) <- species_id
+
+
+tax <- readxl::read_xlsx('../Nick_Analysis/combined_counts.dir/species_tax.xlsx')
+tax <- as.matrix(tax)
+rownames(tax) <- species_id
+
+
+physeq <- make_phyloseq(species[-1,], tax[-1,], map)
+```
+```{r, echo = FALSE,fig.height= 5, fig.width=7, error = F, message = F, warning = F}
+otu_table(physeq) <- otu_table(round(as((otu_table(physeq)), 'matrix')), taxa_are_rows(physeq))
+alpha.data <- estimate_richness(otu_table(physeq), measures = c('Simpson', 'Chao1'))
+rownames(alpha.data) <- map$Sample
+alpha.df <- data.frame(alpha.data, weight = map$weight_loss[match(rownames(alpha.data), map$Sample)], Group = map$Group[match(rownames(alpha.data), map$Sample)], Day = map$Day[match(rownames(alpha.data), map$Sample)],
+                       Weight = map$Weight[match(rownames(alpha.data), map$Sample)], cohort = map$cohort[match(rownames(alpha.data), map$Sample)], number = map$number[match(rownames(alpha.data), map$Sample)])
+alpha.df$Day <- factor(alpha.df$Day, levels =c('Pre', 'Day_42'))
+alpha.df <- alpha.df[-which(alpha.df$number == 54 | alpha.df$number == 48),]
+
+my_labs <- c('Ctrl', 'FK506', 'Bupropion', 'Naltrexone', 'FK506_B', 'FK506_N', 'Bupropion_Naltrexone', 'Sibutramine')
+
+ggboxplot(alpha.df, x = 'Day' , y = 'Chao1', color = 'Group') +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size=14)) +
+  geom_line(aes(group = number), color = '#ddd1db') +
+  facet_wrap(~ Group, scales = 'free_y', nrow =2)+
+  geom_point(aes(color = Group)) +
+  #coord_cartesian(ylim = c(NA,1.05)) +
+  scale_color_manual(values = my_colors$Group, labels = my_labs ) 
+
+dat_paired <- list(
+  FK506 = filter(alpha.df, Group %in% c('A', 'B')),
+  Bupropion = filter(alpha.df, Group %in% c('A', 'C')),
+  Naltrexone = filter(alpha.df, Group %in% c('A', 'D')),
+  FK506_Bupropion = filter(alpha.df, Group %in% c('A', 'E')),
+  FK506_Naltrexone  = filter(alpha.df, Group %in% c('A', 'F')),
+  Bupropion_Naltrexone = filter(alpha.df, Group %in% c('A', 'G')),
+  Sibutramine = filter(alpha.df, Group %in% c('A', 'H'))
+) %>%
+  bind_rows(.id = 'set')
+dat_paired$set <- factor(dat_paired$set, levels = c('FK506','Bupropion', 'Naltrexone', 'FK506_Bupropion', 'FK506_Naltrexone', 'Bupropion_Naltrexone', 'Sibutramine'))
+names(my_colors$Group)
+
+ggplot(dat_paired, aes(x = Group, y = Chao1)) +
+  #stat_compare_means(method = 't.test', label = 'p.format', ref.group = 'A') + 
+  geom_boxplot(aes(color = Group)) +
+  scale_color_manual(values = my_colors$Group, labels = my_labs)+
+  facet_wrap(~ set + Day, scales = 'free') +
+  geom_point(aes(color = Group)) +
+  #geom_text(data = ptest, aes(x = 1, y = 0.4, label = paste0("p=",round(p.value,3)))) +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size=13), legend.position = "bottom") +
+  guides(color = guide_legend(ncol = 2)) 
+
+## Adjusted P-values alpha diversity
+ptest <- dat_paired %>% group_by(set, Day) %>% summarize(p.value = t.test(Simpson ~ Group)$p.value)
+simpson.group <- data.frame(ptest, adj = p.adjust(ptest$p.value, method = "BH"))
+
+ptest <- dat_paired %>% group_by(set, Day) %>% summarize(p.value = t.test(Chao1 ~ Group)$p.value)
+chao1.group <- data.frame(ptest, adj = p.adjust(ptest$p.value, method = "BH"))
+
+ptest <- alpha.df %>% group_by(Group) %>% summarize(p.value = t.test(Chao1 ~ Day, paired = TRUE, alternative = "two.sided")$p.value)
+chao1.time <- data.frame(ptest, adj = p.adjust(ptest$p.value, method = "BH"))
+
+ptest <- alpha.df %>% group_by(Group) %>% summarize(p.value = t.test(Simpson ~ Day, paired = TRUE, alternative = "two.sided")$p.value)
+simpson.time <- data.frame(ptest, adj = p.adjust(ptest$p.value, method = "BH"))
+
+```
+
+# Beta Diversity 
+
+```{r, echo = FALSE,error = F, message = F, warning = F}
+
+physeq.relab <- transform_sample_counts(physeq, function(x) x / sum(x) )
+physeq.rel.filtered <- filter_taxa(physeq.relab, function(x) sum(x >= 0.001) >= 10, TRUE)
+physeq.filtered <- subset(otu_table(physeq), rownames(otu_table(physeq)) %in% rownames(otu_table(physeq.rel.filtered)))
+physeq.filtered <- merge_phyloseq(physeq.filtered, tax_table(physeq), sample_data(physeq))
+
+################################
+### Function: get.betadiv.df ###
+################################
+get.betadiv.df <- function(physeq, Group) {
+  # obtain data frame to plot beta diversity PCA plots of each treatment vs ctrl
+  # 1. Subset physeq  and map into Ctrl and group of interest 
+  sub <- data.frame(sample_data(physeq)[which(sample_data(physeq)$Group=="A" |sample_data(physeq)$Group==Group),])
+  otu <- otu_table(physeq)[, match(sub$Sample,colnames(otu_table(physeq)))]
+  print(dim(sample_data(sub)))
+  print(dim(otu_table(otu)))
+  # 2. calculate beta diversity
+  bdiv <- transform_sample_counts(otu, function(x) 1E6 * x/sum(x))
+  print(class(bdiv))
+  dist.matrix <- t(data.frame(otu_table(bdiv)))
+  bdiv <- vegdist(dist.matrix, method = "bray")
+  pc <- cmdscale(bdiv,k=2)
+  rownames(pc)<-gsub("X", "", rownames(pc))
+  my.df <- data.frame(V1 =pc[,1], V2= pc[,2],  
+                      ID = map$Sample[match(rownames(pc), map$Sample)], 
+                      treatment = map$Treatment[match(rownames(pc), map$Sample)], 
+                      timepoint = map$Day[match(rownames(pc), map$Sample)], 
+                      group = map$Group[match(rownames(pc), map$Sample)])
+  # 3. Adonis
+  print(adonis(bdiv ~ Treatment * Group + cohort, data = data.frame(sub)))
+  return(my.df)
+}
+
+
+fk506 <- get.betadiv.df(physeq.filtered,'B')
+bupropion <- get.betadiv.df(physeq,'C')
+naltrexone <- get.betadiv.df(physeq,'D')
+fk506_bupropion <- get.betadiv.df(physeq,'E')
+fk506_naltrexone <- get.betadiv.df(physeq,'F')
+bupropion_naltrexone <- get.betadiv.df(physeq,'G')
+sibutramine <- get.betadiv.df(physeq,'H')
+  
+my.plot <- bind_rows(fk506, bupropion, naltrexone, fk506_bupropion, fk506_naltrexone, bupropion_naltrexone, sibutramine, .id = 'set')
+set.labs <- c('FK506','Bupropion', 'Naltrexone', 'FK506_Bupropion', 'FK506_Naltrexone', 'Bupropion_Naltrexone', 'Sibutramine')
+names(set.labs) <- c("1", "2", "3", "4", "5", "6", "7")
+
+ggplot(my.plot, aes(x = V1, y = V2, color = group)) +
+  geom_point(stat='identity', size = 2.5, aes(shape = timepoint)) +
+  scale_color_manual(values = my_colors$Group) +
+  facet_wrap(~ set , labeller = labeller(set = set.labs)) +
+  labs(x= 'PC1', y = 'PC2',  title = 'Beta Diversity', color = "Treatment", shape = "Timepoint") +
+  theme_bw()
+
+dat_text <- data.frame(
+  label = c("R2 = 0.02 (ns)", "R2 = 0.06 (ns)", "R2 = 0.033 (ns)", "R2 = 0.05 (ns)", "R2 = 0.038 (ns)", "R2 = 0.13 (***)", "R2 = 0.23 (***)"),
+  set   = c("1", "2", "3", "4", "5", "6", "7")
+)
+
+
+```
+
+
+
+Below are the details of the R session that was used when this script was executed.
+
+```{r sessionInfo}
+print(sessionInfo())
+```
+

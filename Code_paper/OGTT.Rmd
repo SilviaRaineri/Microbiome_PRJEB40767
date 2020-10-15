@@ -1,0 +1,148 @@
+---
+title: "OGTT"
+author: "Silvia Raineri"
+date: "13/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(out.extra = '')
+knitr::opts_knit$set(root.dir = "/Volumes/Mellor/Silvia/Microbiome/RATFAT04/")
+```
+
+
+## OGTT 
+
+This is an analysis of the Oral Glucose Tolerance test results. During OGTT,  blood samples were taken before (-60, 0) and after (10, 20, 30, 45, 60 and 120 minutes) a small dose of Glucose was given to the rats, to evaluate plasma concentration of both Glucose and Insulin over time.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.height=7, fig.width=7}
+library("tidyverse")
+source('./R/microbiome_functions.R')
+library('reshape2')
+
+ogtt <- readxl::read_xls("./Data/Re__Info_RATFAT04/RS1183 OGTT.xls", sheet = 1)
+ogtt.scale <- apply(ogtt[6:21], 2, scale) # transform values into Z scores
+ogtt[,6:21] <- ogtt.scale
+ogtt$sample <- paste0(ogtt$Number, ogtt$Group)
+
+ogtt <- reshape2::melt(ogtt, id.vars = c("Number","Group", "Bleed_Order","Day 1_Bw1","Cohort", "sample"))
+ogtt$set <- "Insulin"
+ogtt$set[grep("GLC", ogtt$variable)] <- "Glucose"
+ogtt$timepoint <- gsub(".*_", "", ogtt$variable)
+ogtt$g <- paste0(ogtt$Group,"_", ogtt$set)
+ogtt$timepoint <- factor(ogtt$timepoint, levels = c("-60", "0", "10", "20", "30", "45", "60", "120"))
+
+dat_paired <- list(
+  FK506 = filter(ogtt, Group %in% c('A', 'B')),
+  Bupropion = filter(ogtt, Group %in% c('A', 'C')),
+  Naltrexone = filter(ogtt, Group %in% c('A', 'D')),
+  FK506_Bupropion = filter(ogtt, Group %in% c('A', 'E')),
+  FK506_Naltrexone  = filter(ogtt, Group %in% c('A', 'F')),
+  Bupropion_Naltrexone = filter(ogtt, Group %in% c('A', 'G')),
+  Sibutramine = filter(ogtt, Group %in% c('A', 'H'))
+) %>%
+  bind_rows(.id = 'comp')
+dat_paired$comp <- factor(dat_paired$comp, levels = c('FK506','Bupropion', 'Naltrexone', 'FK506_Bupropion', 'FK506_Naltrexone', 'Bupropion_Naltrexone', 'Sibutramine'))
+
+my_labs <- c('Ctrl', 'FK506', 'Bupropion', 'Naltrexone', 'FK506_B', 'FK506_N', 'Bupropion_Naltrexone', 'Sibutramine')
+
+ggplot(dat_paired, aes(x = timepoint, y = value, color = Group, linetype = set,  group = g)) +
+  #stat_compare_means(method = 't.test', label = 'p.format', ref.group = 'A') + 
+  geom_line(stat = "summary", fill = "#dde3e9") +
+  scale_color_manual(values = my_colors$Group, labels = my_labs)+
+  facet_wrap(~ comp + set, scales = 'free') +
+  theme_classic() +
+  labs(y = "Z score") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size=13), legend.position = "bottom") +
+  guides(color = guide_legend(ncol = 2)) 
+
+```
+# Stats
+```{R, echo=FALSE, message=FALSE, warning=FALSE}
+library(car)
+library(rstatix)
+ogtt <- readxl::read_xls("./Data/Re__Info_RATFAT04/RS1183 OGTT.xls", sheet = 1)
+ogtt$sample <- paste0(ogtt$Number, ogtt$Group)
+
+ogtt <- reshape2::melt(ogtt, id.vars = c("Number","Group", "Bleed_Order","Day 1_Bw1","Cohort", "sample"))
+ogtt$set <- "Insulin"
+ogtt$set[grep("GLC", ogtt$variable)] <- "Glucose"
+ogtt$timepoint <- gsub(".*_", "", ogtt$variable)
+ogtt$g <- paste0(ogtt$Group,"_", ogtt$set)
+ogtt$timepoint <- factor(ogtt$timepoint, levels = c("-60", "0", "10", "20", "30", "45", "60", "120"))
+
+
+RDCOB = filter(ogtt, Group %in% c('A', 'B'))
+Bupropion = filter(ogtt, Group %in% c('A', 'C'))
+Naltrexone = filter(ogtt, Group %in% c('A', 'D'))
+RDCOB_Bupropion = filter(ogtt, Group %in% c('A', 'E'))
+RDCOB_Naltrexone  = filter(ogtt, Group %in% c('A', 'F'))
+Bupropion_Naltrexone = filter(ogtt, Group %in% c('A', 'G'))
+Sibutramine = filter(ogtt, Group %in% c('A', 'H'))
+
+treatments = list( b = RDCOB, c= Bupropion , d=Naltrexone, e=RDCOB_Bupropion, f=RDCOB_Naltrexone, g=Bupropion_Naltrexone, h =Sibutramine)
+## Anova on Glucose
+
+t.glu <- list()
+for (i in 1:7) {
+  glu <- subset(treatments[[i]], set=="Glucose")
+  t.glu[[i]] <- glu
+}
+
+drugs <- c("RDCOB", "Bupropion", "Naltrexone", "RDCOB_Bupropion", "RDCOB_Naltrexone", "Bupropion_Naltrexone", "Sibutramine")
+
+anova.res <- list()
+for (i in 1:7) {
+  res.aov <- anova_test(
+  data = t.glu[[i]] , dv = value, wid = sample,
+  within = timepoint, between = Group,
+  formula = value ~  timepoint + Group, 
+  detailed = T)
+  tab <- get_anova_table(res.aov)
+  anova.res[[i]] <- tab
+}
+
+names(anova.res) <- drugs
+print(anova.res)
+
+p <- unlist(lapply(anova.res, function(x) x$p))
+p.adj <- p.adjust(p, method = "BH")
+p.adj
+
+## Anova on Insulin
+t.ins <- list()
+for (i in 1:7) {
+  ins <- subset(treatments[[i]], set=="Insulin")
+  t.ins[[i]] <- ins
+}
+
+drugs <- c("RDCOB", "Bupropion", "Naltrexone", "RDCOB_Bupropion", "RDCOB_Naltrexone", "Bupropion_Naltrexone", "Sibutramine")
+
+anova.res.ins <- list()
+for (i in 1:7) {
+  res.aov <- anova_test(
+    data = t.ins[[i]] , dv = value, wid = sample,
+    within = timepoint, between = Group,
+    formula = value ~  timepoint + Group,
+    detailed = T)
+  tab <- get_anova_table(res.aov)
+  anova.res.ins[[i]] <- tab
+}
+
+names(anova.res.ins) <- drugs
+print(anova.res.ins)
+
+
+a <- unlist(lapply(anova.res.ins, function(x) x$p))
+a.adj <- p.adjust(a, method = "BH")
+a.adj
+```
+
+Below are the details of the R session that was used when this script was executed.
+
+```{r sessionInfo}
+print(sessionInfo())
+```
