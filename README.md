@@ -1,5 +1,5 @@
 # Microbiome_PRJEB40767
-Analysis from a shotgun metagenomics experiment of gut microbiome samples from obese female rats treated with a panel of weightloss drugs for 42 Days. Samples were collected at Day -3 (before the start of the treatment) and Day 42 (end of the treatment). Results, methods and experimental design will be published in a dedicated paper (manuscript in preparation). 
+Analysis from a shotgun metagenomics experiment of gut microbiome samples from obese female rats treated with a panel of weightloss drugs for 42 Days. Samples were collected at Day -3 (before the start of the treatment) and Day 42 (end of the treatment). Results, methods and experimental design will be published in a dedicated paper (manuscript in preparation). Raw sequences are uploaded on ENA at the accession number PRJEB40767.
 
 ##  Dependencies
 The analysis was carried out using the R packages listed below:
@@ -10,6 +10,7 @@ The analysis was carried out using the R packages listed below:
 - tidyverse = 1.3.0 
 - reshape2 = 1.4.4
 - car = 3.0-9
+
 At the end of each rmd script, a sessionInfo output can be found, with further specifications.
 
 ## Scripts 
