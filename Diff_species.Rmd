@@ -1,0 +1,166 @@
+---
+title: "Differentially abundant species"
+author: "Silvia Raineri"
+date: "09/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(out.extra = '')
+knitr::opts_knit$set(root.dir = "/Volumes/Mellor/Silvia/Microbiome/RATFAT04/") # NB substitute with appropriate working directory path
+```
+
+## Analysis of Differentially Abundant species 
+
+This is an analysis of differentially abundant species in obese rats upon treatment long-term (42 Days) treatment with Sibutramine. To achieve this, DESeq2 was used with the model: ~ number + day
+
+```{r load.libraries, echo=FALSE, message=FALSE}
+source("config.R")
+library('reshape2')
+library("DESeq2")
+library(tidyverse)
+source('./R/microbiome_functions.R')
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+# Load species table 
+species <- read.delim(species) 
+species <- species[-1,] # take out unassigned
+tax <- species$species
+
+# filter to just keep the relevant samples (group H)
+to.keep <- paste0("day3", "_", c("4", "14", "25", "33", "40", "55", "62", "75", "85"))
+to.keep <- append(to.keep, paste0(gsub("day3", "day42", to.keep), "H"))
+
+species <- species[,to.keep]
+rownames(species) <- tax
+
+# filter out low abundance species
+rel.ab <- apply(species, 2, function(x) x / sum(x) )
+f.relab <- rel.ab[rowSums(rel.ab >= 0.00001) >= 9,]
+species <- species[rownames(species) %in% rownames(f.relab),]
+
+# make metadata and run DESeq2
+metadata <- data.frame(day=gsub("*_.*", "", to.keep),number= c("4", "14", "25", "33", "40",  "55", "62", "75", "85"))
+rownames(metadata) <- to.keep
+dds <- DESeqDataSetFromMatrix(species, colData=metadata, design= ~ number + day)
+dds <- DESeq(dds, test='Wald', fitType='parametric')
+res <- results(dds)
+
+sig <- res[res$padj < 0.05 & !(is.na(res$padj)),]
+
+cat("Number significant = ", nrow(sig))
+rlog.dds <- rlog(dds)
+```
+
+# Plot Boxplots for all differentially abundant species 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+de.species.names <- rownames(sig[which(sig$padj <= 0.05),])
+rlog <- assay(rlog.dds)
+de.rlog <- rlog[match(de.species.names,rownames(rlog)),]
+
+df <- data.frame(de.rlog, otus = rownames(de.rlog)) %>% melt()
+df$variable <- gsub('X', '', df$variable)
+df$Day <- gsub('_.*', '', df$variable)
+df$number <- gsub('.*_', '', df$variable)
+df$number <- gsub('H', '', df$number)
+df$species <- gsub('.*s__', '', df$otus)
+
+to.plot <- list(c(1:20), c(21:40),c(41:60), c(61:80), c(81:100), c(101:120), c(121:140), c(141:160), c(161:180), c(181:195))
+
+for (i in 1:9){
+  rows <- to.plot[[i]]
+  print(rows)
+  show <- rownames(de.rlog[rows,])
+  dfm <- df[which(df$otus %in% show),]
+  p <- ggboxplot(dfm, x = 'Day', y = 'value', color = 'species', group = "number") +
+    geom_line(aes(group = dfm$number), color = "#ddd1db") +
+    geom_point(aes(color = species), size = 2) +
+    facet_wrap(~ species, scale="free_y") +
+    labs(x = "Species", y = "Abundance") +
+    theme(strip.text.x = element_text(size =6), axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size = 14), legend.position = "none")
+  print(p)
+}
+
+```
+# Focus on Bacteroides species 
+Below a focus on all the differentially abundant Bacteroides species
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+show <- df$otus[grep("s__Bacteroides", df$otus)]
+df2 <- df[df$otus %in% show,]
+
+ggboxplot(df2, x = 'Day', y = 'value', color = 'species', group = "number") +
+  geom_line(aes(group = df2$number), color = "#ddd1db") +
+  geom_point(aes(color = species), size = 2) + 
+  facet_wrap(~ species, scale="free_y") +
+  labs(x = "Species", y = "Abundance") +
+  theme(strip.text.x = element_text(size =8), axis.text.x = element_text(angle = 90, hjust = 1), text = element_text(size = 14), legend.position = "none")
+```
+
+# Ratio Bacteroidetes/Firmicutes 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+map <- readxl::read_xlsx('./Data/july19_map.xlsx')
+
+# Extract total number of species for each phylum
+Bact <- f.relab[grep("p__Bacteroidetes", rownames(f.relab)),]
+Firmi <- f.relab[grep("p__Firmicutes", rownames(f.relab)),]
+
+# calculate ratio
+ratio <- colSums(Bact)/colSums(Firmi)
+ratio.df <- data.frame(Samples = names(ratio), Ratio_Bacteroidetes_to_Firmicutes = ratio)
+ratio.df$day <- gsub("_.*", "", ratio.df$Samples)
+ratio.df$number <- gsub(".*_", "", ratio.df$Samples)
+ratio.df$number <- gsub("H|A", "", ratio.df$number)
+ratio.df$cohort <- if_else(ratio.df$number < 45, "1", "2")
+ratio.df$group <- if_else(ratio.df$number %in% map$number[which(map$Group=="A")], "A", "H")
+ratio.df$cohort[which(ratio.df$number ==8)] <- "1"
+
+# Plot by cohort, and both cohorts together
+bfc1 <- subset(ratio.df, cohort==1)
+bfs1 <- ggboxplot(bfc1, x = 'day', y = 'Ratio_Bacteroidetes_to_Firmicutes', color = 'group') +
+  stat_compare_means(method = 't.test', ref.group = 'day3', label = 'p.format', paired = T) +
+  scale_color_manual(values= my_colors$Group[c('A', 'H')],labels = c("Ctrl", "Sib") ) +
+  geom_line(aes(group = bfc1$number), color = "#ddd1db") +
+  geom_point(aes(color = bfc1$group)) +
+  facet_wrap(~ group)+
+  scale_y_log10() +
+  labs(title = 'Cohort 1', y = 'Ratio') +
+  scale_x_discrete(labels = c('Day -3', 'Day 42'))  + theme(axis.text.x = element_text(angle = 90, hjust = 1),text = element_text(size=14))
+
+bfc2 <- subset(ratio.df, cohort==2)
+bfs2 <- ggboxplot(bfc2, x = 'day', y = 'Ratio_Bacteroidetes_to_Firmicutes', color = 'group') +
+  stat_compare_means(method = 't.test', ref.group = 'day3', label = 'p.format', paired = T) +
+  scale_color_manual(values= my_colors$Group[c('A', 'H')],labels = c("Ctrl", "Sib") ) +
+  geom_line(aes(group = bfc2$number), color = "#ddd1db") +
+  geom_point(aes(color = bfc2$group)) +
+  facet_wrap(~ group)+
+  scale_y_log10() +
+  labs(title = 'Cohort 2', y = 'Ratio') +
+  scale_x_discrete(labels = c('Day -3', 'Day 42'))  + theme(axis.text.x = element_text(angle = 90, hjust = 1),text = element_text(size=14))
+
+bfs <- ggboxplot(ratio.df, x = 'day', y = 'Ratio_Bacteroidetes_to_Firmicutes', color = 'group') +
+  stat_compare_means(method = 't.test', ref.group = 'day3', label = 'p.format', paired = T) +
+  scale_color_manual(values= my_colors$Group[c('A', 'H')],labels = c("Ctrl", "Sib") ) +
+  geom_line(aes(group = ratio.df$number), color = "#ddd1db") +
+  geom_point(aes(color = ratio.df$group)) +
+  facet_wrap(~ group)+
+  scale_y_log10() +
+  labs(title = 'Both cohorts', y = 'Ratio') +
+  scale_x_discrete(labels = c('Day -3', 'Day 42'))  + theme(axis.text.x = element_text(angle = 90, hjust = 1),text = element_text(size=14))
+
+l <- ggarrange(bfs1, bfs2, bfs, ncol= 3, nrow = 1, common.legend = T)
+l
+```
+
+Below are the details of the R session that was used when this script was executed.
+
+```{r sessionInfo}
+print(sessionInfo())
+```

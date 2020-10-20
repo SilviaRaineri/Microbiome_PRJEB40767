@@ -1,0 +1,191 @@
+---
+title: "Food Intake"
+author: "Silvia Raineri"
+date: "13/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(out.extra = '')
+knitr::opts_knit$set(root.dir = "/Volumes/Mellor/Silvia/Microbiome/RATFAT04/") # NB substitute with appropriate working directory path
+```
+
+## Food Intake
+
+Daily food (kJ) and water (g) intake were calculated for each animal. 
+Food intake was calculated using the food energy values (20.79 kJ/g (high-fat chow), 23.44 kJ/g (chocolate) and 30.34 kJ/g (ground peanuts).
+
+```{r load.libraries, echo=FALSE, message=FALSE}
+source("config.R")
+library('reshape2')
+library(tidyverse)
+source('./R/microbiome_functions.R')
+```
+# Combined food intake 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+map <- readxl::read_xlsx('./Data/july19_map.xlsx')
+
+### Calculate Combined food intake 
+download.file(food_intake_c1, "food_intake_c1.xlsx")
+download.file(food_intake_c2, "food_intake_c2.xlsx")
+
+hfd <- readxl::read_xlsx("food_intake_c1.xlsx", sheet = 1)
+hfd2 <- readxl::read_xlsx("food_intake_c2.xlsx", sheet = 1)
+hfd <- rbind(hfd, hfd2)
+
+rats <- hfd$Rat
+kj.hfd <- apply(hfd[,-1], 2, as.numeric)
+kj.hfd <- apply(kj.hfd, 2, function(x) x  * 20.79)
+rownames(kj.hfd) <- rats
+
+choco <- readxl::read_xlsx("food_intake_c1.xlsx", sheet = 2)
+choco2 <-  readxl::read_xlsx("food_intake_c2.xlsx", sheet = 2)
+choco <- rbind(choco, choco2)
+
+rats <- choco$Rat
+kj.c <- apply(choco[,-1], 2, as.numeric)
+kj.c <- apply(kj.c, 2, function(x) x  * 23.44)
+rownames(kj.c) <- rats
+
+peanuts <- readxl::read_xlsx("food_intake_c1.xlsx", sheet = 3)
+peanuts2 <- readxl::read_xlsx("food_intake_c2.xlsx", sheet = 3)
+peanuts <- rbind(peanuts, peanuts2)
+
+rats <- peanuts$Rat
+kj.p <- apply(peanuts[,-1], 2, as.numeric)
+kj.p <- apply(kj.p, 2, function(x) x  * 30.34)
+rownames(kj.p) <- rats
+
+comb <- kj.hfd + kj.c + kj.p
+```
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+df <- melt(comb)
+df$tr <- map$Group[match(df$Var1,map$Sample)]
+
+
+dat <- list(
+  FK506 = filter(df, tr %in% c('A', 'B')),
+  Bupropion = filter(df, tr %in% c('A', 'C')),
+  Naltrexone = filter(df, tr %in% c('A', 'D')),
+  FK506_Bupropion = filter(df, tr %in% c('A', 'E')),
+  FK506_Naltrexone  = filter(df, tr %in% c('A', 'F')),
+  Bupropion_Naltrexone = filter(df, tr %in% c('A', 'G')),
+  Sibutramine = filter(df, tr %in% c('A', 'H'))
+) %>%
+  bind_rows(.id = 'set')
+
+
+ctrl <- filter(df, tr=="A")
+ctrl <- ctrl %>% group_by(Var2) %>% summarize(value = mean(value, na.rm = T))
+ctrl$tr <- "A"
+
+d2 <- subset(dat, tr!="A")
+
+ggplot() +
+  geom_line(data=d2, aes(x = Var2, y = value, group = Var1, color = tr)) +
+  geom_line(data=ctrl, aes(x = Var2, y = value, group = tr, color = tr), stat="summary", size = 1) +
+  facet_wrap(~ set)+
+  scale_color_manual(values = my_colors$Group) +
+  scale_x_discrete(breaks = c("Day -3", "Day 0", "Day 15", "Day 36..43", "Day 42")) +
+  labs(color = "Treatment", y = "kJ") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+```
+
+# Stats
+Statistical significance was assessed by ANOVA with the model: value ~ Day + Treatment + Day*Treatment. P-values were corrected using the Benjamini-Hochberg method.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library("rstatix")
+colnames(dat)<- c("set","sample", "Day", "value", "tr")
+
+drugs <- c("FK506", "Bupropion", "Naltrexone", "FK506_Bupropion", "FK506_Naltrexone", "Bupropion_Naltrexone", "Sibutramine")
+
+my.data <- list()
+for(i in 1:7) {
+  a <- subset(dat, set==drugs[i])
+  my.data[[i]] <- a
+}
+
+
+# ANOVA results using Anova function from car package
+
+anova.res.car <- list()
+tukey.res.car <- list()
+for (i in 1:7) {
+  mod <- lm(value ~ Day + tr + Day*tr, my.data[[i]])
+  x <- Anova(mod, type="II") 
+  xt <- tukey_hsd(mod)
+  anova.res.car[[i]] <- list(x)
+  tukey.res.car[[i]] <- list(xt)
+}
+
+names(anova.res.car) <- drugs
+print(anova.res.car)
+
+p <- unlist(lapply(anova.res.car, function(x) x$p))
+p.adj <- p.adjust(p, method = "BH")
+formatC(p.adj,format="e")
+```
+
+# Tukey's post-hoc test on Sibutramine-treated samples (term= Day)
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+x <- tukey.res.car[[7]][[1]]
+x <- subset(x, term=="Day") 
+for (i in 1:length(x$group1)) {
+  x$comparison[i] <- paste(x$group1[i],x$group2[i], collapse= "_")}
+
+x$group1[which(x$group1=="Day 36...43")] <- "Day 36"
+x$group1[which(x$group1=="Day 36...44")] <- "Day 37"
+x$group2[which(x$group2=="Day 36...43")] <- "Day 36"
+x$group2[which(x$group2=="Day 36...44")] <- "Day 37"
+
+
+x$num <- as.numeric(gsub("Day", "", x$group1))
+x$num2 <- as.numeric(gsub("Day", "", x$group2))
+
+ggplot(x, aes(x = num, y =num2, color = padj)) +
+  geom_point(color=if_else(x$p.adj<0.05, "red", "black"))+
+  #facet_wrap(~ fast, scales = "free_x") +
+  theme_classic() +
+  theme(text = element_text(size=14),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+  #scale_x_discrete(breaks = x$num[which(x$p.adj<=0.05)]) +
+  #scale_y_discrete(breaks = x$num[which(x$p.adj<=0.05)]) +
+  labs(x = "First term (Day) of Comparison", y = "Second term (Day) of comparison")
+```
+
+# Food intake composition
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+h <- data.frame(rats, kj.hfd, diet = paste("hfd"))
+ch <- data.frame(rats, kj.c,  diet = paste("chocolate"))
+p <- data.frame(rats, kj.p, diet = paste("peanuts"))
+
+diet <- rbind(h, ch, p)  %>% melt(id.vars=c("rats", "diet"))
+diet$tr <- map$Group[match(diet$rats,map$Sample)]
+
+d2 <- diet %>% group_by( rats, variable) %>% 
+  mutate(percent = value / sum(value) * 100)
+
+ggplot(d2, aes(x = variable, y = percent, fill = diet)) +
+  geom_bar(stat= "summary", position = 'fill') + 
+  scale_fill_manual(values = c('#1e87d2','#542a0c', '#db874a')) +
+  facet_wrap(~ tr) +
+  labs(title = 'Diet composition by Treatment Group (%)', y = "% of Diet")+
+  scale_x_discrete(breaks = c("Day..3", "Day.0", "Day.15", "Day.36..43", "Day.42")) +
+  #scale_y_continuous(labels = scales::percent_format()) +
+  theme_bw() +
+  theme(text = element_text(size=14),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+```
+Below are the details of the R session that was used when this script was executed.
+
+```{r sessionInfo}
+print(sessionInfo())
+```
