@@ -71,6 +71,15 @@ ggplot(dat_paired, aes(x = timepoint, y = value, color = Group, linetype = set, 
 library(car)
 library(rstatix)
 
+ogtt <- read.delim(file=ogtt, sep=",") # Do not scale for stats
+ogtt$sample <- paste0(ogtt$Number, ogtt$Group)
+ogtt <- reshape2::melt(ogtt, id.vars = c("Number","Group", "Bleed_Order","Day.1_Bw1","Cohort", "sample"))
+ogtt$set <- "Insulin"
+ogtt$set[grep("GLC", ogtt$variable)] <- "Glucose"
+ogtt$timepoint <- gsub(".*_", "", ogtt$variable)
+ogtt$g <- paste0(ogtt$Group,"_", ogtt$set)
+ogtt$timepoint <- factor(ogtt$timepoint, levels = c("-60", "0", "10", "20", "30", "45", "60", "120"))
+
 
 FK506 = filter(ogtt, Group %in% c('A', 'B'))
 Bupropion = filter(ogtt, Group %in% c('A', 'C'))
@@ -89,7 +98,7 @@ for (i in 1:7) {
   t.glu[[i]] <- glu
 }
 
-drugs <- c("RDCOB", "Bupropion", "Naltrexone", "RDCOB_Bupropion", "RDCOB_Naltrexone", "Bupropion_Naltrexone", "Sibutramine")
+drugs <- c("FK506", "Bupropion", "Naltrexone", "FK506_Bupropion", "FK506_Naltrexone", "Bupropion_Naltrexone", "Sibutramine")
 
 anova.res <- list()
 for (i in 1:7) {
@@ -116,7 +125,7 @@ for (i in 1:7) {
   t.ins[[i]] <- ins
 }
 
-drugs <- c("RDCOB", "Bupropion", "Naltrexone", "RDCOB_Bupropion", "RDCOB_Naltrexone", "Bupropion_Naltrexone", "Sibutramine")
+drugs <- c("FK506", "Bupropion", "Naltrexone", "FK506_Bupropion", "FK506_Naltrexone", "Bupropion_Naltrexone", "Sibutramine")
 
 anova.res.ins <- list()
 for (i in 1:7) {
